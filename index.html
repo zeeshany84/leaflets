@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>LFT Interpretation Guide</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        div { margin-bottom: 20px; }
+        textarea { width: 100%; height: 150px; }
+        button { margin-top: 10px; margin-right: 10px; }
+        #output { font-weight: bold; }
+    </style>
+</head>
+<body>
+    <div id="inputStep">
+        <h2>Step 1: Paste Blood Test Results</h2>
+        <p>Paste your blood results below (e.g., "Sodium: 140 mmol/L (135-145)..."). The program will focus on LFTs and ignore electrolytes, creatinine, GFR, and CRP.</p>
+        <textarea id="bloodResults" placeholder="Sodium: 140 mmol/L (135-145)..."></textarea>
+        <button onclick="processBloodResults()">Submit</button>
+    </div>
+
+    <div id="clinicalFeaturesStep" style="display:none">
+        <h2>Step 2: Clinical Features</h2>
+        <p>Does the patient have any clinical features of liver disease? (e.g., jaundice, ascites, encephalopathy)</p>
+        <button onclick="answerClinicalFeatures('yes')">Yes</button>
+        <button onclick="answerClinicalFeatures('no')">No</button>
+    </div>
+
+    <div id="ultrasoundStep" style="display:none">
+        <h2>Step 3: Ultrasound Results</h2>
+        <p>Paste the ultrasound findings below (e.g., "Dilated ducts present" or "No dilated ducts").</p>
+        <textarea id="ultrasoundResults" placeholder="Enter ultrasound findings..."></textarea>
+        <button onclick="processUltrasound()">Submit</button>
+    </div>
+
+    <div id="outputStep" style="display:none">
+        <h2>Recommendation</h2>
+        <p id="output"></p>
+    </div>
+
+    <script>
+        // Reference ranges for LFT markers
+        const referenceRanges = {
+            alt: { min: 0, max: 40, unit: 'U/L' },
+            ast: { min: 10, max: 50, unit: 'U/L' },
+            alp: { min: 30, max: 150, unit: 'U/L' },
+            ggt: { min: 10, max: 50, unit: 'U/L' },
+            bilirubin: { min: 2, max: 20, unit: 'umol/L' },
+            albumin: { min: 32, max: 48, unit: 'g/L' },
+            inr: { min: 0.8, max: 1.2, unit: '' }
+        };
+
+        // Relevant LFT markers to process
+        const lftMarkers = Object.keys(referenceRanges);
+
+        let currentPattern = '';
+
+        function processBloodResults() {
+            const input = document.getElementById('bloodResults').value.toLowerCase();
+            const lines = input.split('\n');
+            const results = {};
+
+            // Parse the input to extract LFT values
+            lines.forEach(line => {
+                const match = line.match(/(\w+[\s\w]*):\s*([\d.]+)\s*(\w+(?:\/\w+)?)\s*\(\s*([\d.]+)-([\d.]+)\s*\)/i);
+                if (match) {
+                    const marker = match[1].toLowerCase().replace(/\s+/g, '');
+                    const value = parseFloat(match[2]);
+                    if (lftMarkers.includes(marker)) {
+                        results[marker] = value;
+                    }
+                }
+            });
+
+            // Check for abnormalities
+            const abnormal = {};
+            for (const marker of lftMarkers) {
+                if (results[marker] !== undefined) {
+                    abnormal[marker] = 
+                        (marker === 'albumin' && results[marker] < referenceRanges[marker].min) ||
+                        (marker !== 'albumin' && results[marker] > referenceRanges[marker].max);
+                }
+            }
+
+            // Determine the LFT pattern
+            if ((abnormal.alt || abnormal.ast) && !abnormal.alp && !abnormal.ggt) {
+                currentPattern = 'hepatocellular';
+            } else if ((abnormal.alp || abnormal.ggt) && !abnormal.alt && !abnormal.ast) {
+                currentPattern = 'cholestatic';
+            } else if ((abnormal.alt || abnormal.ast) && (abnormal.alp || abnormal.ggt)) {
+                currentPattern = 'mixed';
+            } else if (abnormal.bilirubin && !abnormal.alt && !abnormal.ast && !abnormal.alp && !abnormal.ggt) {
+                currentPattern = 'isolated_hyperbilirubinemia';
+            } else if (abnormal.albumin || abnormal.inr) {
+                currentPattern = 'synthetic_failure';
+            } else {
+                currentPattern = 'no_abnormality';
+            }
+
+            // Hide input step and show clinical features question
+            document.getElementById('inputStep').style.display = 'none';
+            document.getElementById('clinicalFeaturesStep').style.display = 'block';
+        }
+
+        function answerClinicalFeatures(answer) {
+            let recommendation = '';
+
+            if (answer === 'yes') {
+                recommendation = 'Consider referral to secondary care for further evaluation due to clinical features of liver disease.';
+            } else {
+                switch (currentPattern) {
+                    case 'hepatocellular':
+                        recommendation = 'Consider first-tier tests: Full Blood Count (FBC), HbA1c, lipid profile, iron studies, hepatitis screening (HBsAg, anti-HCVAb), AUDIT-C.';
+                        break;
+                    case 'cholestatic':
+                        recommendation = 'Consider liver ultrasound to assess for biliary obstruction. Please paste the ultrasound results in the next step.';
+                        document.getElementById('clinicalFeaturesStep').style.display = 'none';
+                        document.getElementById('ultrasoundStep').style.display = 'block';
+                        return; // Wait for ultrasound input
+                    case 'mixed':
+                        recommendation = 'Mixed pattern detected: consider both hepatocellular and cholestatic causes. Suggest liver ultrasound and first-tier tests (FBC, HbA1c, lipid profile, iron studies, hepatitis screening, AUDIT-C).';
+                        break;
+                    case 'isolated_hyperbilirubinemia':
+                        recommendation = 'Consider fractionated bilirubin test to determine if unconjugated or conjugated.';
+                        break;
+                    case 'synthetic_failure':
+                        recommendation = 'Possible synthetic liver failure. Consider referral for urgent ultrasound or secondary care review.';
+                        break;
+                    default:
+                        recommendation = 'No significant LFT abnormalities detected.';
+                }
+            }
+
+            displayOutput(recommendation);
+        }
+
+        function processUltrasound() {
+            const input = document.getElementById('ultrasoundResults').value.toLowerCase();
+            let recommendation = '';
+
+            if (input.includes('dilated ducts')) {
+                recommendation = 'Ultrasound shows dilated ducts. Consider ERCP or MRCP for further evaluation.';
+            } else if (input.includes('no dilated ducts') || input.includes('normal')) {
+                recommendation = 'Ultrasound shows no dilated ducts. Consider testing for antimitochondrial antibodies to check for primary biliary cholangitis.';
+            } else {
+                recommendation = 'Ultrasound findings unclear. Consider specialist referral for further interpretation.';
+            }
+
+            displayOutput(recommendation);
+        }
+
+        function displayOutput(text) {
+            document.getElementById('output').innerText = text;
+            document.getElementById('clinicalFeaturesStep').style.display = 'none';
+            document.getElementById('ultrasoundStep').style.display = 'none';
+            document.getElementById('outputStep').style.display = 'block';
+        }
+    </script>
+</body>
+</html>
